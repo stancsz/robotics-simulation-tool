@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Enhanced Humanoid with Multiple Joints in Three.js</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 15px;
+      border-radius: 10px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.3);
+      width: 240px;
+    }
+    #controls input, #controls button {
+      margin: 6px 0;
+      width: 100%;
+      padding: 8px;
+      font-size: 14px;
+    }
+    #controls button {
+      cursor: pointer;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 5px;
+    }
+    #controls button:hover {
+      background-color: #45a049;
+    }
+    #tips {
+      font-size: 12px; 
+      color: #333;
+      margin-top: 10px;
+    }
+    #tips ul {
+      padding-left: 20px; 
+      margin: 5px 0;
+    }
+    #tips li {
+      list-style-type: square;
+    }
+  </style>
+
+  <!-- Include Three.js library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+  <div id="controls">
+    <input id="commandInput" type="text" placeholder="Enter command, e.g. wave" />
+    <button onclick="processCommand()">Send Command</button>
+    <div id="tips">
+      <strong>Available Commands:</strong>
+      <ul>
+        <li>wave</li>
+        <li>raise hand</li>
+        <li>jump</li>
+        <li>wave head</li>
+        <li>nod</li>
+        <li>point</li>
+        <li>reset</li>
+      </ul>
+    </div>
+  </div>
+  <div id="sceneContainer" style="width: 100%; height: 100vh;"></div>
+
+  <script>
+    /********************************
+     *  SCENE, CAMERA, RENDERER
+     ********************************/
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xe0e0e0);
+
+    const camera = new THREE.PerspectiveCamera(
+      50,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      1000
+    );
+    // Position the camera at a 45-degree angle
+    const cameraDistance = 10;
+    const cameraHeight = 5;
+    const angle45 = Math.PI / 4;
+    camera.position.set(
+      cameraDistance * Math.cos(angle45),
+      cameraHeight,
+      cameraDistance * Math.sin(angle45)
+    );
+    camera.lookAt(0, 2, 0); // Look towards the humanoid's center
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.getElementById('sceneContainer').appendChild(renderer.domElement);
+
+    /********************************
+     *  LIGHTS & HELPERS
+     ********************************/
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    dirLight.position.set(5, 10, 7);
+    scene.add(dirLight);
+
+    const gridHelper = new THREE.GridHelper(20, 20);
+    scene.add(gridHelper);
+
+    // Optional AxesHelper for reference
+    // const axesHelper = new THREE.AxesHelper(5);
+    // scene.add(axesHelper);
+
+    /********************************
+     *  MATERIALS
+     ********************************/
+    const limbMaterial  = new THREE.MeshStandardMaterial({ color: 0x0000ff });
+    const jointMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+    const bodyMaterial  = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+
+    /********************************
+     *  HELPER FUNCTIONS
+     ********************************/
+    function createCylinder(height, radius, material) {
+      // In Three.js, a cylinder is aligned along the Y-axis by default
+      const geo = new THREE.CylinderGeometry(radius, radius, height, 12);
+      const mesh = new THREE.Mesh(geo, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    function createSphere(radius, material) {
+      const geo = new THREE.SphereGeometry(radius, 16, 16);
+      const mesh = new THREE.Mesh(geo, material);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      return mesh;
+    }
+
+    /********************************
+     *  HUMANOID SETUP
+     ********************************/
+    const humanoid = new THREE.Group();
+    scene.add(humanoid);
+
+    /**********  TORSO  **********/
+    const torsoHeight = 2.0;
+    const torsoRadius = 0.3;
+    const torsoMesh   = createCylinder(torsoHeight, torsoRadius, bodyMaterial);
+    torsoMesh.position.y = -torsoHeight / 2; // pivot at top
+    const torsoGroup  = new THREE.Group();
+    torsoGroup.add(torsoMesh);
+    humanoid.add(torsoGroup);
+
+    // Place the torso so shoulders are around world y=3
+    torsoGroup.position.set(0, 3, 0);
+
+    /**********  HEAD  **********/
+    const headGroup = new THREE.Group();
+    const headSphere = createSphere(0.4, bodyMaterial);
+    headSphere.position.y = 0.4;
+    headGroup.add(headSphere);
+    // Attach head at top of torso (local 0,0,0)
+    torsoGroup.add(headGroup);
+
+    /********************************
+     *      ARMS WITH 2 JOINTS
+     ********************************/
+    // For each arm:
+    // 1) Shoulder pivot (attached to torso)
+    // 2) Upper arm -> elbow joint
+    // 3) Forearm -> wrist joint
+    // 4) Hand
+
+    const armRadius     = 0.12;
+    const upperArmLength= 1.0;
+    const forearmLength = 1.0;
+    const handLength    = 0.4; 
+
+    // LEFT ARM
+    const leftShoulderGroup = new THREE.Group();
+    // Position near left shoulder
+    leftShoulderGroup.position.set(-0.5, -0.2, 0);
+    torsoGroup.add(leftShoulderGroup);
+
+    // -- Upper Arm --
+    const leftUpperArmGroup = new THREE.Group();
+    leftShoulderGroup.add(leftUpperArmGroup);
+    const leftUpperArm = createCylinder(upperArmLength, armRadius, limbMaterial);
+    // Pivot at top
+    leftUpperArm.position.y = -upperArmLength / 2;
+    leftUpperArmGroup.add(leftUpperArm);
+
+    // Elbow joint
+    const leftElbowJoint = createSphere(0.14, jointMaterial);
+    leftElbowJoint.position.y = -upperArmLength; 
+    leftUpperArmGroup.add(leftElbowJoint);
+
+    // -- Forearm --
+    const leftForearmGroup = new THREE.Group();
+    leftForearmGroup.position.y = -upperArmLength; // elbow
+    leftUpperArmGroup.add(leftForearmGroup);
+
+    const leftForearm = createCylinder(forearmLength, armRadius, limbMaterial);
+    leftForearm.position.y = -forearmLength / 2;
+    leftForearmGroup.add(leftForearm);
+
+    // Wrist joint
+    const leftWristJoint = createSphere(0.12, jointMaterial);
+    leftWristJoint.position.y = -forearmLength;
+    leftForearmGroup.add(leftWristJoint);
+
+    // -- Hand --
+    const leftHandGroup = new THREE.Group();
+    leftHandGroup.position.y = -forearmLength; // wrist
+    leftForearmGroup.add(leftHandGroup);
+
+    const leftHand = createCylinder(handLength, armRadius * 0.8, limbMaterial);
+    leftHand.rotation.x = Math.PI / 2; // Extend forward
+    leftHand.position.y = -handLength / 2;
+    leftHandGroup.add(leftHand);
+
+    // RIGHT ARM (mirror)
+    const rightShoulderGroup = new THREE.Group();
+    rightShoulderGroup.position.set(0.5, -0.2, 0);
+    torsoGroup.add(rightShoulderGroup);
+
+    const rightUpperArmGroup = new THREE.Group();
+    rightShoulderGroup.add(rightUpperArmGroup);
+    const rightUpperArm = createCylinder(upperArmLength, armRadius, limbMaterial);
+    rightUpperArm.position.y = -upperArmLength / 2;
+    rightUpperArmGroup.add(rightUpperArm);
+
+    const rightElbowJoint = createSphere(0.14, jointMaterial);
+    rightElbowJoint.position.y = -upperArmLength;
+    rightUpperArmGroup.add(rightElbowJoint);
+
+    const rightForearmGroup = new THREE.Group();
+    rightForearmGroup.position.y = -upperArmLength;
+    rightUpperArmGroup.add(rightForearmGroup);
+
+    const rightForearm = createCylinder(forearmLength, armRadius, limbMaterial);
+    rightForearm.position.y = -forearmLength / 2;
+    rightForearmGroup.add(rightForearm);
+
+    const rightWristJoint = createSphere(0.12, jointMaterial);
+    rightWristJoint.position.y = -forearmLength;
+    rightForearmGroup.add(rightWristJoint);
+
+    const rightHandGroup = new THREE.Group();
+    rightHandGroup.position.y = -forearmLength;
+    rightForearmGroup.add(rightHandGroup);
+
+    const rightHand = createCylinder(handLength, armRadius * 0.8, limbMaterial);
+    rightHand.rotation.x = Math.PI / 2; 
+    rightHand.position.y = -handLength / 2;
+    rightHandGroup.add(rightHand);
+
+    /********************************
+     *      LEGS WITH 2 JOINTS
+     ********************************/
+    // For each leg:
+    // 1) Hip pivot (attached to torso bottom)
+    // 2) Thigh -> knee joint
+    // 3) Shin -> ankle joint
+    // 4) Foot
+
+    const legRadius    = 0.13;
+    const thighLength  = 1.0;
+    const shinLength   = 1.0;
+    const footLength   = 0.5;
+
+    // LEFT LEG
+    const leftHipGroup = new THREE.Group();
+    leftHipGroup.position.set(-0.3, -torsoHeight, 0); 
+    torsoGroup.add(leftHipGroup);
+
+    // Thigh
+    const leftThighGroup = new THREE.Group();
+    leftHipGroup.add(leftThighGroup);
+
+    const leftThigh = createCylinder(thighLength, legRadius, limbMaterial);
+    leftThigh.position.y = -thighLength / 2; 
+    leftThighGroup.add(leftThigh);
+
+    // Knee joint
+    const leftKneeJoint = createSphere(0.14, jointMaterial);
+    leftKneeJoint.position.y = -thighLength;
+    leftThighGroup.add(leftKneeJoint);
+
+    // Shin
+    const leftShinGroup = new THREE.Group();
+    leftShinGroup.position.y = -thighLength; 
+    leftThighGroup.add(leftShinGroup);
+
+    const leftShin = createCylinder(shinLength, legRadius, limbMaterial);
+    leftShin.position.y = -shinLength / 2;
+    leftShinGroup.add(leftShin);
+
+    // Ankle joint
+    const leftAnkleJoint = createSphere(0.12, jointMaterial);
+    leftAnkleJoint.position.y = -shinLength;
+    leftShinGroup.add(leftAnkleJoint);
+
+    // Foot
+    const leftFootGroup = new THREE.Group();
+    leftFootGroup.position.y = -shinLength;
+    leftShinGroup.add(leftFootGroup);
+
+    const leftFoot = createCylinder(footLength, legRadius * 0.8, limbMaterial);
+    leftFoot.rotation.x = Math.PI / 2; // Extend forward
+    leftFoot.position.z = footLength / 2; 
+    leftFootGroup.add(leftFoot);
+
+    // RIGHT LEG
+    const rightHipGroup = new THREE.Group();
+    rightHipGroup.position.set(0.3, -torsoHeight, 0);
+    torsoGroup.add(rightHipGroup);
+
+    const rightThighGroup = new THREE.Group();
+    rightHipGroup.add(rightThighGroup);
+
+    const rightThigh = createCylinder(thighLength, legRadius, limbMaterial);
+    rightThigh.position.y = -thighLength / 2;
+    rightThighGroup.add(rightThigh);
+
+    const rightKneeJoint = createSphere(0.14, jointMaterial);
+    rightKneeJoint.position.y = -thighLength;
+    rightThighGroup.add(rightKneeJoint);
+
+    const rightShinGroup = new THREE.Group();
+    rightShinGroup.position.y = -thighLength;
+    rightThighGroup.add(rightShinGroup);
+
+    const rightShin = createCylinder(shinLength, legRadius, limbMaterial);
+    rightShin.position.y = -shinLength / 2;
+    rightShinGroup.add(rightShin);
+
+    const rightAnkleJoint = createSphere(0.12, jointMaterial);
+    rightAnkleJoint.position.y = -shinLength;
+    rightShinGroup.add(rightAnkleJoint);
+
+    const rightFootGroup = new THREE.Group();
+    rightFootGroup.position.y = -shinLength;
+    rightShinGroup.add(rightFootGroup);
+
+    const rightFoot = createCylinder(footLength, legRadius * 0.8, limbMaterial);
+    rightFoot.rotation.x = Math.PI / 2; 
+    rightFoot.position.z = footLength / 2;
+    rightFootGroup.add(rightFoot);
+
+    /********************************
+     *  ANIMATION SYSTEM
+     ********************************/
+    let isAnimating = false;
+    const animations = [];
+
+    // Animation Queue Handler
+    function enqueueAnimation(animation) {
+      animations.push(animation);
+    }
+
+    // Easing Function for Smooth Animations
+    function easeInOutQuad(t) {
+      return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+    }
+
+    // Smooth Rotation Animation
+    function rotateAnimation(
+      group,
+      targetAngle,
+      duration = 500,
+      axis = 'x',
+      onComplete = () => {}
+    ) {
+      const startTime = performance.now();
+      const initialAngle = group.rotation[axis];
+      const diff = targetAngle - initialAngle;
+
+      function step(now) {
+        const elapsed = now - startTime;
+        if (elapsed < duration) {
+          const progress = elapsed / duration;
+          group.rotation[axis] = initialAngle + diff * easeInOutQuad(progress);
+          requestAnimationFrame(step);
+        } else {
+          group.rotation[axis] = targetAngle;
+          onComplete();
+        }
+      }
+      requestAnimationFrame(step);
+    }
+
+    // Smooth Position Animation (for jumping)
+    function positionAnimation(object, targetPosition, duration = 500, onComplete = () => {}) {
+      const startTime = performance.now();
+      const initialPosition = object.position.y;
+      const positionDifference = targetPosition - initialPosition;
+
+      function step(now) {
+        const elapsed = now - startTime;
+        if (elapsed < duration) {
+          const progress = elapsed / duration;
+          object.position.y = initialPosition + positionDifference * easeInOutQuad(progress);
+          requestAnimationFrame(step);
+        } else {
+          object.position.y = targetPosition;
+          onComplete();
+        }
+      }
+
+      requestAnimationFrame(step);
+    }
+
+    // Reset Pose Animation
+    function resetAnimation(onComplete = () => {}) {
+      // Reset all joints to 0 rotation
+      const resetTasks = [
+        // Arms
+        (cb) => rotateAnimation(leftUpperArmGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(leftForearmGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(leftHandGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(rightUpperArmGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(rightForearmGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(rightHandGroup, 0, 500, 'x', cb),
+
+        // Legs
+        (cb) => rotateAnimation(leftThighGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(leftShinGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(leftFootGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(rightThighGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(rightShinGroup, 0, 500, 'x', cb),
+        (cb) => rotateAnimation(rightFootGroup, 0, 500, 'x', cb),
+
+        // Humanoid Position (if jumped)
+        (cb) => {
+          const startY = humanoid.position.y;
+          if (Math.abs(startY) < 0.001) {
+            cb();
+          } else {
+            positionAnimation(humanoid, 0, 300, cb);
+          }
+        }
+      ];
+
+      // Execute reset tasks sequentially
+      let current = 0;
+      function executeNext() {
+        if (current < resetTasks.length) {
+          resetTasks[current](() => {
+            current++;
+            executeNext();
+          });
+        } else {
+          onComplete();
+        }
+      }
+      executeNext();
+    }
+
+    // Jump Animation
+    function jumpAnimation(object, jumpHeight = 1.5, totalDuration = 600, onComplete = () => {}) {
+      // Move object up and down
+      const startTime = performance.now();
+      const startY = object.position.y;
+
+      function step(now) {
+        const elapsed = now - startTime;
+        if (elapsed < totalDuration) {
+          const progress = elapsed / totalDuration;
+          if (progress < 0.5) {
+            // Ascend
+            object.position.y = startY + jumpHeight * easeInOutQuad(progress * 2);
+          } else {
+            // Descend
+            const descendProgress = (progress - 0.5) * 2;
+            object.position.y = startY + jumpHeight * (1 - easeInOutQuad(descendProgress));
+          }
+          requestAnimationFrame(step);
+        } else {
+          // End
+          object.position.y = startY;
+          onComplete();
+        }
+      }
+
+      requestAnimationFrame(step);
+    }
+
+    // Wave Animation (Right Arm)
+    function waveAnimation(times = 3, amplitude = Math.PI / 6, duration = 300) {
+      // Wave by rotating the right forearm back and forth
+      const rotations = [];
+      for (let i = 0; i < times; i++) {
+        rotations.push(amplitude);   // Bend up
+        rotations.push(-amplitude);  // Bend down
+      }
+      rotations.push(0); // Return to original position
+
+      let current = 0;
+      function executeWaveStep() {
+        if (current < rotations.length) {
+          rotateAnimation(rightForearmGroup, rotations[current], duration, 'x', () => {
+            current++;
+            executeWaveStep();
+          });
+        }
+      }
+      executeWaveStep();
+    }
+
+    // Wave Head Function
+    function waveHeadAnimation(times = 3, amplitude = Math.PI / 6, duration = 300) {
+      // Wave head by rotating left and right
+      const rotations = [];
+      for (let i = 0; i < times; i++) {
+        rotations.push(amplitude);    // Rotate right
+        rotations.push(-amplitude);   // Rotate left
+      }
+      rotations.push(0); // Return to original position
+
+      let current = 0;
+      function executeHeadWaveStep() {
+        if (current < rotations.length) {
+          rotateAnimation(headGroup, rotations[current], duration, 'y', () => {
+            current++;
+            executeHeadWaveStep();
+          });
+        }
+      }
+      executeHeadWaveStep();
+    }
+
+    // Nod Head Function
+    function nodAnimation(times = 3, amplitude = Math.PI / 6, duration = 300) {
+      // Nod head up and down
+      const rotations = [];
+      for (let i = 0; i < times; i++) {
+        rotations.push(amplitude);    // Nod down
+        rotations.push(-amplitude);   // Nod up
+      }
+      rotations.push(0); // Return to original position
+
+      let current = 0;
+      function executeNodStep() {
+        if (current < rotations.length) {
+          rotateAnimation(headGroup, rotations[current], duration, 'x', () => {
+            current++;
+            executeNodStep();
+          });
+        }
+      }
+      executeNodStep();
+    }
+
+    // Pointing Function
+    function pointAnimation(duration = 500) {
+      // Point by extending the right arm forward
+      rotateAnimation(rightForearmGroup, Math.PI / 4, duration, 'x', () => {
+        // Hold the point for a moment
+        setTimeout(() => {
+          // Return to original position
+          rotateAnimation(rightForearmGroup, 0, duration, 'x', () => {});
+        }, 500);
+      });
+    }
+
+    // Raise Hand Function
+    function raiseHandAnimation(duration = 500) {
+      // Raise the right upper arm to simulate raising hand
+      rotateAnimation(rightUpperArmGroup, -Math.PI / 4, duration, 'x', () => {});
+    }
+
+    /********************************
+     *  ANIMATION LOOP HANDLER
+     ********************************/
+    function animateQueue() {
+      if (isAnimating || animations.length === 0) return;
+      isAnimating = true;
+      const currentAnimation = animations.shift();
+      currentAnimation(() => {
+        isAnimating = false;
+      });
+    }
+
+    /********************************
+     *  COMMANDS
+     ********************************/
+    function processCommand() {
+      const cmd = document.getElementById('commandInput').value.trim().toLowerCase();
+      document.getElementById('commandInput').value = '';
+
+      switch (cmd) {
+        // Arm Commands
+        case 'bend left elbow':
+          enqueueAnimation((done) => rotateAnimation(leftForearmGroup, -Math.PI / 4, 500, 'x', done));
+          break;
+        case 'straighten left elbow':
+          enqueueAnimation((done) => rotateAnimation(leftForearmGroup, 0, 500, 'x', done));
+          break;
+        case 'bend right elbow':
+          enqueueAnimation((done) => rotateAnimation(rightForearmGroup, Math.PI / 4, 500, 'x', done));
+          break;
+        case 'straighten right elbow':
+          enqueueAnimation((done) => rotateAnimation(rightForearmGroup, 0, 500, 'x', done));
+          break;
+
+        // Wrist Commands
+        case 'bend left wrist':
+          enqueueAnimation((done) => rotateAnimation(leftHandGroup, -Math.PI / 4, 500, 'x', done));
+          break;
+        case 'straighten left wrist':
+          enqueueAnimation((done) => rotateAnimation(leftHandGroup, 0, 500, 'x', done));
+          break;
+        case 'bend right wrist':
+          enqueueAnimation((done) => rotateAnimation(rightHandGroup, Math.PI / 4, 500, 'x', done));
+          break;
+        case 'straighten right wrist':
+          enqueueAnimation((done) => rotateAnimation(rightHandGroup, 0, 500, 'x', done));
+          break;
+
+        // Leg Commands
+        case 'bend left knee':
+          enqueueAnimation((done) => rotateAnimation(leftShinGroup, -Math.PI / 4, 500, 'x', done));
+          break;
+        case 'straighten left knee':
+          enqueueAnimation((done) => rotateAnimation(leftShinGroup, 0, 500, 'x', done));
+          break;
+        case 'bend right knee':
+          enqueueAnimation((done) => rotateAnimation(rightShinGroup, Math.PI / 4, 500, 'x', done));
+          break;
+        case 'straighten right knee':
+          enqueueAnimation((done) => rotateAnimation(rightShinGroup, 0, 500, 'x', done));
+          break;
+
+        case 'bend left ankle':
+          enqueueAnimation((done) => rotateAnimation(leftFootGroup, -Math.PI / 6, 500, 'x', done));
+          break;
+        case 'straighten left ankle':
+          enqueueAnimation((done) => rotateAnimation(leftFootGroup, 0, 500, 'x', done));
+          break;
+        case 'bend right ankle':
+          enqueueAnimation((done) => rotateAnimation(rightFootGroup, Math.PI / 6, 500, 'x', done));
+          break;
+        case 'straighten right ankle':
+          enqueueAnimation((done) => rotateAnimation(rightFootGroup, 0, 500, 'x', done));
+          break;
+
+        // Movement Commands
+        case 'jump':
+          enqueueAnimation((done) => jumpAnimation(humanoid, 1.5, 600, done));
+          break;
+        case 'reset':
+          enqueueAnimation((done) => resetAnimation(done));
+          break;
+        case 'wave':
+          enqueueAnimation((done) => {
+            // Wave right arm 3 times
+            waveAnimation(3, Math.PI / 6, 300);
+            // Wait for the waving to complete
+            setTimeout(done, 300 * 6); // Each wave cycle takes 2*duration (up and down)
+          });
+          break;
+        case 'wave head':
+          enqueueAnimation((done) => {
+            // Wave head (nod head 3 times)
+            waveHeadAnimation(3, Math.PI / 6, 300); // Increased amplitude
+            setTimeout(done, 300 * 6); // Each head wave cycle takes 2*duration
+          });
+          break;
+        case 'nod':
+          enqueueAnimation((done) => {
+            // Nod head (up and down)
+            nodAnimation(3, Math.PI / 6, 300); // Increased amplitude
+            setTimeout(done, 300 * 6);
+          });
+          break;
+        case 'point':
+          enqueueAnimation((done) => {
+            // Point with right arm
+            pointAnimation(500);
+            // Wait for pointing to complete
+            setTimeout(done, 1000); // Duration for pointing
+          });
+          break;
+        case 'raise hand':
+          enqueueAnimation((done) => {
+            // Raise the right arm by rotating the upper arm group
+            raiseHandAnimation(500);
+            // Hold the raised position for a moment
+            setTimeout(done, 500);
+          });
+          break;
+        default:
+          alert(
+            'Unknown command!\nAvailable commands:\n- wave\n- raise hand\n- jump\n- wave head\n- nod\n- point\n- reset'
+          );
+      }
+    }
+
+    /********************************
+     *  RENDER LOOP
+     ********************************/
+    function renderLoop() {
+      animateQueue();
+      renderer.render(scene, camera);
+      requestAnimationFrame(renderLoop);
+    }
+    renderLoop();
+
+    /********************************
+     *  HANDLE RESIZE
+     ********************************/
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    });
+
+    /********************************
+     *  ANIMATION FUNCTIONS
+     ********************************/
+    // Waving Function
+    function waveAnimation(times = 3, amplitude = Math.PI / 6, duration = 300) {
+      // Wave by rotating the right forearm back and forth
+      const rotations = [];
+      for (let i = 0; i < times; i++) {
+        rotations.push(amplitude);   // Bend up
+        rotations.push(-amplitude);  // Bend down
+      }
+      rotations.push(0); // Return to original position
+
+      let current = 0;
+      function executeWaveStep() {
+        if (current < rotations.length) {
+          rotateAnimation(rightForearmGroup, rotations[current], duration, 'x', () => {
+            current++;
+            executeWaveStep();
+          });
+        }
+      }
+      executeWaveStep();
+    }
+
+    // Wave Head Function
+    function waveHeadAnimation(times = 3, amplitude = Math.PI / 6, duration = 300) {
+      // Wave head by rotating left and right
+      const rotations = [];
+      for (let i = 0; i < times; i++) {
+        rotations.push(amplitude);    // Rotate right
+        rotations.push(-amplitude);   // Rotate left
+      }
+      rotations.push(0); // Return to original position
+
+      let current = 0;
+      function executeHeadWaveStep() {
+        if (current < rotations.length) {
+          rotateAnimation(headGroup, rotations[current], duration, 'y', () => {
+            current++;
+            executeHeadWaveStep();
+          });
+        }
+      }
+      executeHeadWaveStep();
+    }
+
+    // Nod Head Function
+    function nodAnimation(times = 3, amplitude = Math.PI / 6, duration = 300) {
+      // Nod head up and down
+      const rotations = [];
+      for (let i = 0; i < times; i++) {
+        rotations.push(amplitude);    // Nod down
+        rotations.push(-amplitude);   // Nod up
+      }
+      rotations.push(0); // Return to original position
+
+      let current = 0;
+      function executeNodStep() {
+        if (current < rotations.length) {
+          rotateAnimation(headGroup, rotations[current], duration, 'x', () => {
+            current++;
+            executeNodStep();
+          });
+        }
+      }
+      executeNodStep();
+    }
+
+    // Pointing Function
+    function pointAnimation(duration = 500) {
+      // Point by extending the right arm forward
+      rotateAnimation(rightForearmGroup, Math.PI / 4, duration, 'x', () => {
+        // Hold the point for a moment
+        setTimeout(() => {
+          // Return to original position
+          rotateAnimation(rightForearmGroup, 0, duration, 'x', () => {});
+        }, 500);
+      });
+    }
+
+    // Raise Hand Function
+    function raiseHandAnimation(duration = 500) {
+      // Raise the right upper arm to simulate raising hand
+      rotateAnimation(rightUpperArmGroup, -Math.PI / 4, duration, 'x', () => {});
+    }
+  </script>
+</body>
+</html>
